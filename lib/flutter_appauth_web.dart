@@ -45,7 +45,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
         scopes: request.scopes,
         serviceConfiguration: request.serviceConfiguration,
         additionalParameters: request.additionalParameters,
-        allowInsecureConnections: request.allowInsecureConnections,
+        allowInsecureConnections: request.allowInsecureConnections ?? false,
         discoveryUrl: request.discoveryUrl,
         issuer: request.issuer,
         promptValues: request.promptValues));
@@ -53,7 +53,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
     final tokenResponse = await requestToken(TokenRequest(request.clientId, request.redirectUrl,
         clientSecret: request.clientSecret,
         serviceConfiguration: request.serviceConfiguration,
-        allowInsecureConnections: request.allowInsecureConnections,
+        allowInsecureConnections: request.allowInsecureConnections ?? false,
         authorizationCode: authResult.authorizationCode,
         codeVerifier: authResult.codeVerifier,
         discoveryUrl: request.discoveryUrl,
