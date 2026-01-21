@@ -13,7 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_appauth_platform_interface/flutter_appauth_platform_interface.dart';
 import 'package:pointycastle/digests/sha256.dart';
 
-/// A Calculator.
+/// AppAuth Web Plugin - compatible with flutter_appauth_platform_interface 11.0.0
 class AppAuthWebPlugin extends FlutterAppAuthPlatform {
   static const String _charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
   static const String _DISCOVERY_ERROR_MESSAGE_FORMAT = "Error retrieving discovery document: [error: discovery_failed, description: %2]";
@@ -32,27 +32,28 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
   }
 
   @override
-  Future<AuthorizationTokenResponse?> authorizeAndExchangeCode(AuthorizationTokenRequest request) async {
+  Future<AuthorizationTokenResponse> authorizeAndExchangeCode(AuthorizationTokenRequest request) async {
     final authUrl = html.window.sessionStorage[_AUTHORIZE_DESTINATION_URL];
-    if (authUrl != null || authUrl != null && authUrl.isNotEmpty) return null;
+    if (authUrl != null && authUrl.isNotEmpty) {
+      throw StateError(_AUTHORIZE_ERROR_MESSAGE_FORMAT
+          .replaceAll("%1", _AUTHORIZE_AND_EXCHANGE_CODE_ERROR_CODE)
+          .replaceAll("%2", "Authorization already in progress"));
+    }
 
     final authResult = await authorize(AuthorizationRequest(request.clientId, request.redirectUrl,
         loginHint: request.loginHint,
         scopes: request.scopes,
         serviceConfiguration: request.serviceConfiguration,
         additionalParameters: request.additionalParameters,
-        allowInsecureConnections: request.allowInsecureConnections!,
+        allowInsecureConnections: request.allowInsecureConnections,
         discoveryUrl: request.discoveryUrl,
         issuer: request.issuer,
-        preferEphemeralSession: request.preferEphemeralSession!,
         promptValues: request.promptValues));
-
-    if (authResult == null) return null;
 
     final tokenResponse = await requestToken(TokenRequest(request.clientId, request.redirectUrl,
         clientSecret: request.clientSecret,
         serviceConfiguration: request.serviceConfiguration,
-        allowInsecureConnections: request.allowInsecureConnections!,
+        allowInsecureConnections: request.allowInsecureConnections,
         authorizationCode: authResult.authorizationCode,
         codeVerifier: authResult.codeVerifier,
         discoveryUrl: request.discoveryUrl,
@@ -64,7 +65,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
   }
 
   @override
-  Future<AuthorizationResponse?> authorize(AuthorizationRequest request) async {
+  Future<AuthorizationResponse> authorize(AuthorizationRequest request) async {
     String? codeVerifier;
 
     // check if we already have login-callback data
@@ -73,7 +74,11 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
       html.window.sessionStorage.remove(_AUTH_RESPONSE_INFO);
 
       codeVerifier = html.window.sessionStorage[_CODE_VERIFIER_STORAGE];
-      if (codeVerifier == null || codeVerifier.isEmpty) return null;
+      if (codeVerifier == null || codeVerifier.isEmpty) {
+        throw StateError(_AUTHORIZE_ERROR_MESSAGE_FORMAT
+            .replaceAll("%1", _AUTHORIZE_ERROR_CODE)
+            .replaceAll("%2", "Code verifier not found in session storage"));
+      }
       html.window.sessionStorage.remove(_CODE_VERIFIER_STORAGE);
 
       return processLoginResult(authUrl, codeVerifier);
@@ -93,10 +98,11 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
 
     if (request.loginHint != null) authUri += "&login_hint=${Uri.encodeQueryComponent(request.loginHint!)}";
 
-    if (request.promptValues != null)
-      request.promptValues!.forEach((element) {
+    if (request.promptValues != null) {
+      for (var element in request.promptValues!) {
         authUri += "&prompt=$element";
-      });
+      }
+    }
     if (request.additionalParameters != null) request.additionalParameters!.forEach((key, value) => authUri += "&$key=$value");
 
     String loginResult;
@@ -108,11 +114,18 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
         html.window.sessionStorage[_AUTHORIZE_DESTINATION_URL] = html.window.location.href;
         html.window.sessionStorage[_CODE_VERIFIER_STORAGE] = codeVerifier;
         html.window.location.assign(authUri);
-        return null;
-        // loginResult = await openPopUp(authUri, 'auth', 640, 600, true);
+        // This will redirect the page, throwing to indicate the flow is incomplete
+        // The caller should handle this by checking session storage on page load
+        throw StateError(_AUTHORIZE_ERROR_MESSAGE_FORMAT
+            .replaceAll("%1", _AUTHORIZE_ERROR_CODE)
+            .replaceAll("%2", "Redirecting to authorization endpoint"));
       }
-    } on StateError catch (err) {
-      throw StateError(_AUTHORIZE_ERROR_MESSAGE_FORMAT.replaceAll("%1", _AUTHORIZE_AND_EXCHANGE_CODE_ERROR_CODE).replaceAll("%2", err.message));
+    } on StateError {
+      rethrow;
+    } catch (err) {
+      throw StateError(_AUTHORIZE_ERROR_MESSAGE_FORMAT
+          .replaceAll("%1", _AUTHORIZE_AND_EXCHANGE_CODE_ERROR_CODE)
+          .replaceAll("%2", err.toString()));
     }
 
     return processLoginResult(loginResult, codeVerifier);
@@ -124,7 +137,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
   }
 
   @override
-  Future<EndSessionResponse?> endSession(EndSessionRequest request) async {
+  Future<EndSessionResponse> endSession(EndSessionRequest request) async {
     final AuthorizationServiceConfiguration serviceConfiguration = await getConfiguration(request.serviceConfiguration, request.discoveryUrl, request.issuer);
     String uri = "${serviceConfiguration.endSessionEndpoint}?id_token_hint=${request.idTokenHint}";
 
@@ -139,7 +152,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
     // lets redirect to the endsession uri
     html.window.location.assign(uri);
 
-    return EndSessionResponse(null);
+    return EndSessionResponse(request.state);
   }
 
   Future<TokenResponse> requestToken(TokenRequest request) async {
@@ -171,7 +184,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
     return TokenResponse(
       jsonResponse["access_token"].toString(),
       jsonResponse["refresh_token"] == null ? null : jsonResponse["refresh_token"].toString(),
-      DateTime.now().add(new Duration(seconds: jsonResponse["expires_in"])),
+      DateTime.now().add(Duration(seconds: jsonResponse["expires_in"])),
       jsonResponse["id_token"].toString(),
       jsonResponse["token_type"].toString(),
       scopes,
@@ -179,7 +192,6 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
     );
   }
 
-  //returns null if full login is required
   AuthorizationResponse processLoginResult(String loginResult, String codeVerifier) {
     var resultUri = Uri.parse(loginResult.toString());
 
@@ -198,7 +210,6 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
     );
   }
 
-  //to-do Cache this based on the url
   Future<AuthorizationServiceConfiguration> getConfiguration(AuthorizationServiceConfiguration? serviceConfiguration, String? discoveryUrl, String? issuer) async {
     if ((discoveryUrl == null || discoveryUrl == '') && (issuer == null || issuer == '') && serviceConfiguration == null)
       throw ArgumentError('You must specify either a discoveryUrl, issuer, or serviceConfiguration');
@@ -231,7 +242,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
     if (additionalOptions != null && additionalOptions != '') options += ',$additionalOptions';
 
     final child = html.window.open(url, name, options);
-    final c = new Completer<String>();
+    final c = Completer<String>();
 
     html.window.onMessage.first.then((event) {
       final url = event.data.toString();
@@ -262,7 +273,7 @@ class AppAuthWebPlugin extends FlutterAppAuthPlatform {
 
     html.querySelector("body")?.children.add(child);
 
-    final c = new Completer<String>();
+    final c = Completer<String>();
 
     html.window.onMessage.first.then((event) {
       final url = event.data.toString();
